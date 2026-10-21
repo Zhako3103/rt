@@ -10,7 +10,7 @@ To understand better how ray tracing works, it is highly suggested that you sear
 
 Below is an example of an image which your ray tracer should be able to produce:
 
-![image.png](raytrace.png)
+
 
 > The image generated includes reflection that is one of the required bonus features. More information below.
 
