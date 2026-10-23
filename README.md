@@ -1,156 +1,56 @@
-# Ray Tracer на Rust
+# rt
 
-Учебный трассировщик лучей на чистом Rust **без внешних зависимостей**.
-Рендерит 3D-сцены в текстовый формат **PPM (P3)**.
+A **multithreaded CPU ray tracer built from scratch in pure Rust**. It has no external dependencies: parallelism uses `std::thread::scope`, and the image is written to a plain PPM file.
 
-## Возможности
+## Features
 
-- Примитивы с настраиваемым положением и размерами: **сфера**, **плоскость**, **куб/параллелепипед** (с поворотом вокруг оси Y), **цилиндр** (с крышками).
-- Камера: позиция, точка взгляда, угол обзора (FOV), любое разрешение.
-- Точечные источники света с регулируемой яркостью и цветом.
-- Тени (shadow rays), освещение по Блинну–Фонгу (ambient + diffuse + specular).
-- Отражения (reflection) — параметр `reflectivity` материала, глубина настраивается.
-- Сглаживание (несколько лучей на пиксель), гамма-коррекция.
-- Многопоточный рендер на `std::thread::scope`.
-- Шахматная текстура для плоскости.
+- **Primitives:** sphere, plane, **cube with arbitrary rotation** (ray/box intersection with the *slab method* in the cube's local space) and cylinder.
+- **Lighting:** Blinn-Phong shading (ambient, diffuse, specular).
+- **Shadows:** shadow rays toward each light.
+- **Reflections:** recursive reflection rays with a bounded depth.
+- **Anti-aliasing:** multiple samples per pixel.
+- **Gamma correction** before writing the output.
+- **Multithreading:** the image is split into rows/tiles rendered concurrently with scoped threads.
+- **Camera:** configurable position, direction and field of view.
 
-## Структура проекта
-
-```
-raytracer/
-├── Cargo.toml
-├── README.md
-└── src/
-    ├── main.rs        # CLI, сборка камеры и запись результата
-    ├── vec3.rs        # Vec3 / Color: векторная алгебра
-    ├── ray.rs         # Луч P(t) = O + t·D
-    ├── material.rs    # Материал: цвет, блики, зеркальность, шахматка
-    ├── light.rs       # Точечный источник света
-    ├── camera.rs      # Pinhole-камера
-    ├── scene.rs       # Контейнер объектов и света, фон-небо, поиск пересечений
-    ├── renderer.rs    # Трассировка, тени, отражения, потоки
-    ├── image.rs       # Запись PPM P3
-    ├── scenes.rs      # Готовые сцены (здесь удобно экспериментировать)
-    └── objects/
-        ├── mod.rs     # trait Hittable, структура Hit
-        ├── sphere.rs
-        ├── plane.rs
-        ├── cube.rs
-        └── cylinder.rs
-```
-
-## Сборка и запуск
-
-Нужен Rust 1.63+ (`std::thread::scope`). Установка: <https://rustup.rs>.
+## Build
 
 ```bash
 cargo build --release
-
-# Сцена по умолчанию (все объекты, 800x600) в файл через перенаправление stdout:
-cargo run --release > output.ppm
-
-# То же, но с записью в файл самой программой:
-cargo run --release -- --scene all --out output.ppm
 ```
 
-Прогресс и время рендера выводятся в **stderr**, поэтому файл `.ppm` остаётся чистым.
-
-### Просмотр PPM
-
-PPM открывают GIMP, IrfanView, XnView, `feh`, `eog`. Конвертация в PNG:
+## Usage
 
 ```bash
-magick output.ppm output.png      # ImageMagick
-# или
-convert output.ppm output.png
+# Render the default scene
+cargo run --release -- --width 800 --height 600 --output scene.ppm
+
+# Higher quality: more samples per pixel, more reflection bounces
+cargo run --release -- --width 1280 --height 720 --samples 16 --depth 5 --output scene_hq.ppm
 ```
 
-## Обязательные сцены
+| Flag | Description |
+| --- | --- |
+| `--width`, `--height` | Output resolution in pixels |
+| `--samples` | Anti-aliasing samples per pixel |
+| `--depth` | Maximum reflection depth |
+| `--threads` | Number of worker threads (defaults to available cores) |
+| `--output` | Output file name (`.ppm`) |
 
-| № | Имя          | Что внутри                                         | Команда |
-|---|--------------|----------------------------------------------------|---------|
-| 1 | `sphere`     | Одна сфера                                         | `cargo run --release -- -s sphere > 1_sphere.ppm` |
-| 2 | `plane-cube` | Плоскость + куб, **тусклый свет** (intensity 0.4)  | `cargo run --release -- -s plane-cube > 2_plane_cube.ppm` |
-| 3 | `all`        | Сфера, куб, цилиндр и плоскость                    | `cargo run --release -- -s all > 3_all.ppm` |
-| 4 | `all-side`   | Та же сцена, **другой ракурс**                     | `cargo run --release -- -s all-side > 4_all_side.ppm` |
-| 5 | `mirror`     | Бонус: зеркальная + глянцевая сферы (как референс) | `cargo run --release -- -s mirror > 5_mirror.ppm` |
-
-`cargo run --release -- --list` выводит список сцен.
-
-Сцену 4 можно получить и из сцены 3 без пересборки, изменив только камеру:
+Convert to PNG with ImageMagick if needed:
 
 ```bash
-cargo run --release -- -s all --cam-pos 7,4,5 --cam-target 0,0.8,0 > 4_all_side.ppm
+convert scene.ppm scene.png
 ```
 
-## Параметры командной строки
+## Rendering pipeline
 
-| Параметр | Значение | По умолчанию |
-|---|---|---|
-| `-s, --scene` | имя или номер сцены | `all` (3) |
-| `-w, --width` / `-H, --height` | разрешение | 800 × 600 |
-| `--samples` | лучей на пиксель (1 = без сглаживания) | 4 |
-| `--depth` | глубина рекурсии отражений | 4 |
-| `-t, --threads` | число потоков | все ядра |
-| `--cam-pos x,y,z` | позиция камеры | из сцены |
-| `--cam-target x,y,z` | точка, на которую смотрит камера | из сцены |
-| `--fov` | вертикальный угол обзора, ° | 40 |
-| `-o, --out` | файл вместо stdout | stdout |
+1. For every pixel, generate camera rays (several per pixel for anti-aliasing).
+2. Find the nearest intersection among all objects.
+3. Compute Blinn-Phong lighting, tracing a shadow ray to every light.
+4. Spawn a reflection ray for reflective materials and blend the result.
+5. Apply gamma correction and write the pixel.
 
-Быстрый тест: `cargo run --release -- -w 200 -H 150 --samples 1 > test.ppm`
+## What this project demonstrates
 
-## Как изменить сцену
-
-Откройте `src/scenes.rs` — там все сцены собираются в коде.
-Система координат: **X вправо, Y вверх, Z к зрителю**.
-
-```rust
-let mut scene = Scene::new();
-
-// Сфера: центр, радиус, материал
-scene.add(Sphere::new(v(-2.4, 1.0, 0.0), 1.0, Material::new(v(0.85, 0.15, 0.12))));
-
-// Плоскость: точка и нормаль (или Plane::horizontal(y, материал))
-scene.add(Plane::new(v(0.0, 0.0, 0.0), v(0.0, 1.0, 0.0), Material::new(v(0.8, 0.8, 0.8))));
-
-// Куб: центр, ребро (или Cube::new с размерами по осям), поворот вокруг Y
-scene.add(Cube::cube(v(0.0, 0.75, 0.0), 1.5, mat).with_rotation_y(25.0));
-
-// Цилиндр (ось вдоль Y): центр, радиус, высота
-scene.add(Cylinder::new(v(2.4, 1.0, 0.0), 0.8, 2.0, mat));
-
-// Свет: позиция и яркость (+ опционально цвет)
-scene.add_light(Light::new(v(-4.0, 6.0, 6.0), 1.0));
-scene.add_light(Light::new(v(6.0, 3.0, 4.0), 0.25).with_color(v(1.0, 0.9, 0.8)));
-```
-
-### Материалы
-
-```rust
-Material::new(color)                 // цвет RGB в 0..1
-    .with_specular(0.6, 64.0)        // сила и резкость блика
-    .with_reflectivity(0.5)          // 0 = матовый, 1 = зеркало
-    .with_checker(color2, 1.0)       // шахматка с клеткой 1.0
-```
-
-### Свои примитивы
-
-Реализуйте `trait Hittable` из `src/objects/mod.rs` (один метод `hit`) и добавьте объект через `scene.add(...)`.
-
-## Как это работает (кратко)
-
-1. Для каждого пикселя камера строит луч (`camera.rs`).
-2. `Scene::hit` ищет ближайшее пересечение среди всех объектов.
-3. **Сфера** — квадратное уравнение; **плоскость** — `t = (P0−O)·N / (D·N)`;
-   **куб** — метод «плит» (slab method) в локальных координатах с поворотом;
-   **цилиндр** — квадратное уравнение по (x, z) + две крышки.
-4. Освещение: `ambient + Σ lights (diffuse·max(N·L,0) + specular·max(N·H,0)^shininess)`.
-5. **Тени**: из точки к каждому источнику пускается теневой луч; если на пути есть объект — вклад света не добавляется.
-6. **Отражения**: `color = (1−k)·local + k·trace(отражённый луч)`, `k = reflectivity`.
-7. Результат ограничивается 0..1, гамма-коррекция (γ=2) и вывод в P3.
-
-## Типичные проблемы
-
-- **Файл огромный** — P3 текстовый: 800×600 ≈ 5–7 МБ, это нормально.
-- **Слишком тёмно / светло** — меняйте `intensity` в `Light::new`.
-- **Долго считается** — уменьшите `--samples`, `--depth` или разрешение.
+Applied linear algebra, geometric intersection tests, shared-nothing parallelism with `std::thread::scope`, and numeric care (self-intersection bias, gamma-correct output).
